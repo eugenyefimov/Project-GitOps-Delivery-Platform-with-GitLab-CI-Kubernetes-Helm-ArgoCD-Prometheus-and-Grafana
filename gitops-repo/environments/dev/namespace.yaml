@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-dev
+  labels:
+    platform.environment: dev
+    app.kubernetes.io/part-of: platform-app

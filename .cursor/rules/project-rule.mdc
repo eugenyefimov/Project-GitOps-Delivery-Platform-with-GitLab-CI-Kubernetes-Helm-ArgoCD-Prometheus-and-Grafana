@@ -1,0 +1,70 @@
+---
+alwaysApply: true
+---
+
+Use these rules throughout the project.
+
+Architecture rules
+Never mix application code and deployment manifests
+Never deploy directly from CI to Kubernetes
+Never bypass GitOps repository
+Always treat GitOps repo as the deployment source of truth
+Simplicity rules
+Prefer clarity over cleverness
+Avoid unnecessary abstraction
+Avoid adding tools not explicitly required
+Avoid “enterprise fantasy” features
+Interview rules
+
+Everything you implement must answer:
+
+Why does this exist?
+What problem does it solve?
+What would break if removed?
+What are the trade-offs?
+
+If you cannot explain it simply → it should not exist.
+
+⚙️ CODING RULES (КОД И КОНФИГИ)
+General
+Write clean, readable, production-style code
+Use clear naming
+Avoid magic values
+Avoid hardcoding environment-specific values
+Docker
+Use minimal base images
+Use proper layering
+Avoid unnecessary packages
+Keep images small
+Kubernetes
+Always include:
+readinessProbe
+livenessProbe
+resource requests and limits
+Avoid overcomplicated manifests
+Use labels consistently
+Helm
+Keep templates readable
+Do not overuse templating tricks
+Use values.yaml properly
+Separate environments via values files
+🔐 SECURITY RULES
+Never store secrets in code
+Assume secrets come from CI/CD or Kubernetes
+Avoid printing sensitive data in logs
+Avoid insecure defaults
+🔁 CI/CD RULES (GitLab)
+Pipeline must be deterministic
+Use clear stages:
+test
+build
+publish
+gitops update
+Do not mix responsibilities between stages
+Use environment variables properly
+Do not hardcode credentials
+🔄 GITOPS RULES (ArgoCD)
+ArgoCD pulls from Git, never from CI
+Git defines desired state
+Changes happen via commits
+No manual kubectl apply in final design

@@ -1,0 +1,4 @@
+/environments/dev/ @platform-team
+/environments/staging/ @platform-team
+/environments/prod/ @platform-team
+/argocd/ @platform-team

@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-app-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: platform-app
+    platform.environment: dev
+spec:
+  project: platform-app-project
+  source:
+    repoURL: https://gitlab.com/example-org/platform-gitops.git
+    targetRevision: main
+    path: charts/platform-app
+    helm:
+      valueFiles:
+        - values-dev.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: platform-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

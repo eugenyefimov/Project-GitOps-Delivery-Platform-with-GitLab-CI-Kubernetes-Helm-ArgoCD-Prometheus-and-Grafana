@@ -1,0 +1,16 @@
+.git
+.cursor
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+venv
+.venv
+dist
+build
+coverage
+docs
+helm
+scripts
+app/tests

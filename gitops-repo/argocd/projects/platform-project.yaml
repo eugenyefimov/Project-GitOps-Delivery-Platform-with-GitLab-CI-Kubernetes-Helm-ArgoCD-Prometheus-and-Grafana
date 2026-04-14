@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform-app-project
+  namespace: argocd
+spec:
+  description: ArgoCD project boundaries for platform-app environments
+  sourceRepos:
+    - https://gitlab.com/example-org/platform-gitops.git
+  destinations:
+    - namespace: platform-dev
+      server: https://kubernetes.default.svc
+    - namespace: platform-staging
+      server: https://kubernetes.default.svc
+    - namespace: platform-prod
+      server: https://kubernetes.default.svc
+  namespaceResourceWhitelist:
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: Secret
+    - group: apps
+      kind: Deployment
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: monitoring.coreos.com
+      kind: ServiceMonitor

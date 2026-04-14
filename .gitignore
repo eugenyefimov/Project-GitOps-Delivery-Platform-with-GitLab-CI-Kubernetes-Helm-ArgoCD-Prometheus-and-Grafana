@@ -1,0 +1,17 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python cache (if app service uses Python)
+__pycache__/
+*.pyc
+
+# Build artifacts
+dist/
+build/
+coverage/
+
+# Helm package artifacts
+*.tgz

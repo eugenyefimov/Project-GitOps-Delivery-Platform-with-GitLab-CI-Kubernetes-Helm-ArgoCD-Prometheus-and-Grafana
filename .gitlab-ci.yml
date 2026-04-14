@@ -1,0 +1,212 @@
+stages:
+  - test
+  - build
+  - image_publish
+  - gitops_update
+
+default:
+  interruptible: true
+  retry: 1
+
+variables:
+  APP_NAME: platform-app
+  IMAGE_REPO: $CI_REGISTRY_IMAGE/$APP_NAME
+  IMAGE_TAG_SHA: $CI_COMMIT_SHORT_SHA
+  IMAGE_TAG_REF: $CI_COMMIT_REF_SLUG-$CI_PIPELINE_IID
+  IMAGE_REF: $IMAGE_REPO:$IMAGE_TAG_SHA
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  GITOPS_TARGET_BRANCH: main
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+# Shared Docker-in-Docker configuration for build/publish jobs.
+.docker_job:
+  image: docker:27.1.1
+  services:
+    - docker:27.1.1-dind
+  before_script:
+    - docker info
+
+test:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - pip install --no-cache-dir -r requirements-dev.lock
+    - pytest app/tests -q
+
+validate_gitops_manifests:
+  stage: test
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache git helm
+  script:
+    - test -n "$GITOPS_REPO_URL"
+    - |
+      if [ -n "$GITOPS_READ_TOKEN" ]; then
+        cat > /tmp/git-askpass.sh <<'EOF'
+        #!/bin/sh
+        case "$1" in
+          *Username*) echo "oauth2" ;;
+          *Password*) echo "$GITOPS_READ_TOKEN" ;;
+          *) echo "" ;;
+        esac
+        EOF
+        chmod 700 /tmp/git-askpass.sh
+        GIT_ASKPASS=/tmp/git-askpass.sh GIT_TERMINAL_PROMPT=0 git clone "$GITOPS_REPO_URL" gitops-repo
+      elif [ -n "$GITOPS_PUSH_TOKEN" ]; then
+        cat > /tmp/git-askpass.sh <<'EOF'
+        #!/bin/sh
+        case "$1" in
+          *Username*) echo "oauth2" ;;
+          *Password*) echo "$GITOPS_PUSH_TOKEN" ;;
+          *) echo "" ;;
+        esac
+        EOF
+        chmod 700 /tmp/git-askpass.sh
+        GIT_ASKPASS=/tmp/git-askpass.sh GIT_TERMINAL_PROMPT=0 git clone "$GITOPS_REPO_URL" gitops-repo
+      else
+        git clone "$GITOPS_REPO_URL" gitops-repo
+      fi
+    - helm lint gitops-repo/charts/platform-app
+    - helm template platform-app-dev gitops-repo/charts/platform-app -f gitops-repo/charts/platform-app/values-dev.yaml > /dev/null
+    - helm template platform-app-staging gitops-repo/charts/platform-app -f gitops-repo/charts/platform-app/values-staging.yaml > /dev/null
+    - helm template platform-app-prod gitops-repo/charts/platform-app -f gitops-repo/charts/platform-app/values-prod.yaml > /dev/null
+
+build:
+  stage: build
+  extends: .docker_job
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+  script:
+    - export IMAGE_TAG="${IMAGE_TAG_SHA}"
+    - export IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
+    - docker build --pull -t "$IMAGE_REF" -t "${IMAGE_REPO}:${IMAGE_TAG_REF}" .
+    # Persist image and metadata for publish and GitOps stages.
+    - docker save "$IMAGE_REF" "${IMAGE_REPO}:${IMAGE_TAG_REF}" -o image.tar
+    - echo "IMAGE_REF=$IMAGE_REF" >> build.env
+    - echo "IMAGE_TAG=$IMAGE_TAG" >> build.env
+    - echo "IMAGE_TAG_REF=$IMAGE_TAG_REF" >> build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+    paths:
+      - image.tar
+    expire_in: 1 day
+
+image_publish:
+  stage: image_publish
+  extends: .docker_job
+  needs:
+    - job: build
+      artifacts: true
+  script:
+    - docker load -i image.tar
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+    - docker push "$IMAGE_REF"
+    - docker push "${IMAGE_REPO}:${IMAGE_TAG_REF}"
+    - export IMAGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_REF" | awk -F'@' '{print $2}')"
+    - test -n "$IMAGE_DIGEST"
+    - echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> publish.env
+    # Optional moving tag for default branch convenience.
+    - |
+      if [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        docker tag "$IMAGE_REF" "$IMAGE_REPO:latest"
+        docker push "$IMAGE_REPO:latest"
+      fi
+  artifacts:
+    reports:
+      dotenv: publish.env
+    expire_in: 1 day
+  rules:
+    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+
+security_scan_image:
+  stage: gitops_update
+  image: aquasec/trivy:0.56.2
+  needs:
+    - job: build
+      artifacts: true
+    - job: image_publish
+  script:
+    - trivy image --severity HIGH,CRITICAL --ignore-unfixed --format json --output trivy-report.json "$IMAGE_REF"
+  artifacts:
+    paths:
+      - trivy-report.json
+    expire_in: 7 days
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH || $CI_COMMIT_TAG'
+      allow_failure: false
+    - if: '$CI_COMMIT_BRANCH'
+      allow_failure: true
+
+gitops_update_dev:
+  stage: gitops_update
+  image: python:3.12-alpine
+  needs:
+    - job: build
+      artifacts: true
+    - job: image_publish
+      artifacts: true
+  before_script:
+    - apk add --no-cache git
+    - pip install --no-cache-dir pyyaml==6.0.2
+  script:
+    # Default target is dev; staging/prod promotion is handled separately.
+    - export GITOPS_TARGET_ENV="dev"
+    - export GITOPS_IMAGE_TAG_FILE="charts/platform-app/values-dev.yaml"
+    - export GITOPS_IMAGE_DIGEST_KEY="image.digest"
+    - python ci/scripts/update_gitops_repo.py
+  rules:
+    # Only main branch automatically updates GitOps dev environment.
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+promote_staging:
+  stage: gitops_update
+  image: python:3.12-alpine
+  needs:
+    - job: build
+      artifacts: true
+    - job: image_publish
+      artifacts: true
+  before_script:
+    - apk add --no-cache git
+    - pip install --no-cache-dir pyyaml==6.0.2
+  script:
+    - export GITOPS_TARGET_ENV="staging"
+    - export GITOPS_IMAGE_TAG_FILE="charts/platform-app/values-staging.yaml"
+    - export GITOPS_IMAGE_DIGEST_KEY="image.digest"
+    - python ci/scripts/update_gitops_repo.py
+  environment:
+    name: staging
+  when: manual
+  allow_failure: false
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+promote_prod:
+  stage: gitops_update
+  image: python:3.12-alpine
+  needs:
+    - job: build
+      artifacts: true
+    - job: image_publish
+      artifacts: true
+  before_script:
+    - apk add --no-cache git
+    - pip install --no-cache-dir pyyaml==6.0.2
+  script:
+    - export GITOPS_TARGET_ENV="prod"
+    - export GITOPS_IMAGE_TAG_FILE="charts/platform-app/values-prod.yaml"
+    - export GITOPS_IMAGE_DIGEST_KEY="image.digest"
+    - python ci/scripts/update_gitops_repo.py
+  environment:
+    name: production
+  when: manual
+  allow_failure: false
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
