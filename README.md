@@ -1,37 +1,41 @@
 # Platform App - Application Repository
 
-Production-style application repository for a GitOps delivery platform built with GitLab CI/CD, Docker, Kubernetes, Helm, ArgoCD, Prometheus, and Grafana.
+Application repository for a production-style two-repository GitOps delivery platform.
 
 ## Project Purpose
 
-This repository demonstrates a clean separation between:
+This repository owns the application lifecycle:
 
-- application lifecycle (build, test, package, publish)
-- deployment lifecycle (GitOps state managed in a separate repository)
+- source code and tests
+- container build and publish
+- CI automation that updates deployment state in an external GitOps repository
 
-The goal is an interview-defensible, realistic DevOps workflow where every release is traceable from commit to running workload.
+It does not own cluster manifests as source-of-truth and does not deploy directly to Kubernetes.
 
-## Architecture Role of This Repository
+## Two-Repository Architecture
 
-This is the **application repository**. It owns:
+The platform is intentionally split into:
 
-- application source code and tests
-- container build definition
-- CI/CD automation that publishes the image
-- CI logic that updates deployment state in the separate GitOps repository
+- **Application repository (this repo)**: build, test, scan, publish image, update GitOps state
+- **GitOps repository (external remote repo)**: Helm values/manifests, ArgoCD Applications, environment deployment state
 
-It does **not** own direct Kubernetes deployment. Cluster reconciliation is delegated to ArgoCD.
+This separation is required for GitOps integrity:
+
+- GitOps repository remains the single source of truth for desired cluster state
+- CI credentials in app repo do not require direct cluster admin access
+- deployment history is auditable as Git commits in deployment repo
+- app delivery and cluster reconciliation are decoupled operationally
 
 ## CI Pipeline Flow
 
 Pipeline stages:
 
-- `test`: run unit/integration tests with locked development dependencies
-- `validate_gitops_manifests`: clone GitOps repo and lint/render Helm chart for `dev`, `staging`, `prod`
-- `build`: build image and produce trace metadata
-- `image_publish`: push tags and capture immutable image digest
-- `security_scan`: run Trivy vulnerability scan before any GitOps update
-- `gitops_update` jobs:
+- `test`: run unit/integration tests with locked dependencies
+- `validate_gitops_manifests`: clone external GitOps repository and lint/render Helm chart for `dev`, `staging`, `prod`
+- `build`: build container image and generate trace metadata
+- `image_publish`: push tags and capture immutable digest
+- `security_scan`: run Trivy scan before GitOps update jobs
+- `gitops_update`:
   - `gitops_update_dev` (automatic on default branch)
   - `promote_staging` (manual)
   - `promote_prod` (manual)
@@ -45,72 +49,73 @@ Each pipeline publishes:
 - convenience tag: `latest` (default branch only)
 - immutable digest: `sha256:...` (captured after push)
 
-The digest is the deployment source of truth used for GitOps updates.
+Digest is used as deployment truth to avoid mutable-tag drift.
 
-## How the GitOps Repository Gets Updated
+## How CI Updates the External GitOps Repository
 
-After image publish, CI runs `ci/scripts/update_gitops_repo.py` to:
+After publish, CI runs `ci/scripts/update_gitops_repo.py`:
 
-1. clone the GitOps repository using CI-provided credentials
-2. update target environment values file (default: `charts/platform-app/values-dev.yaml`)
-3. write `image.repository` and `image.digest` with published artifact metadata
-4. commit with deployment trace metadata (app, env, source commit, pipeline)
-5. push to GitOps target branch
+1. clones external GitOps repo using secure CI credentials (`GITOPS_REPO_URL` + token)
+2. updates target values file (default: `charts/platform-app/values-dev.yaml` in GitOps repo)
+3. writes `image.repository` and `image.digest`
+4. commits with release trace metadata
+5. pushes to GitOps target branch
 
-Staging and production updates use the same mechanism through manual promotion jobs.
+Staging and production updates use the same updater through manual promotion jobs.
 
-## Why ArgoCD Deploys Instead of CI
+For `dev`, the modified GitOps file is:
 
-Direct CI-to-cluster deployment is intentionally avoided.
+- `charts/platform-app/values-dev.yaml`
 
-ArgoCD deploys from Git because it provides:
+ArgoCD watches the GitOps repository branch and application path. When CI pushes this values change, ArgoCD detects drift and reconciles the cluster to the new desired image state.
 
-- declarative desired state
+This preserves GitOps principles because CI changes Git state only; ArgoCD performs the deployment reconciliation to Kubernetes.
+
+## Why Deployment Is Handled by ArgoCD
+
+CI must not deploy directly to Kubernetes in a GitOps model.
+
+ArgoCD deploys by reconciling GitOps repository state to cluster state:
+
 - pull-based reconciliation
-- auditable deployment history in Git
-- deterministic rollback via Git revert
-
-This preserves GitOps principles and reduces CI blast radius.
+- declarative drift correction
+- auditable rollback via Git history
+- reduced CI blast radius and credential exposure
 
 ## Key Technologies
 
-- **GitLab CI/CD**: pipeline orchestration, artifact flow, promotion controls
-- **Docker**: non-root runtime image build and packaging
-- **Helm**: Kubernetes application templating with env-specific values
-- **ArgoCD**: GitOps reconciliation and environment deployment control
-- **Prometheus**: metrics scraping from `/metrics`
-- **Grafana**: metrics visualization and operational dashboards
+- **GitLab CI/CD**: pipeline orchestration and promotions
+- **Docker**: container build/package
+- **Kubernetes**: runtime platform
+- **Helm**: deployment packaging (in external GitOps repo)
+- **ArgoCD**: GitOps reconciliation (from external GitOps repo)
+- **Prometheus/Grafana**: metrics and visualization
 
 ## DevOps Capabilities Demonstrated
 
-- two-repository GitOps architecture (app repo + GitOps repo)
-- immutable release strategy with digest-based deployments
-- promotion model across `dev`, `staging`, `prod`
-- CI validation of deployment manifests before promotion
-- security baseline with vulnerability scanning and least-privilege runtime
-- observability-ready application behavior (health, readiness, metrics, structured logs)
+- strict two-repository GitOps boundary
+- digest-based immutable release updates
+- controlled promotion flow (`dev` -> `staging` -> `prod`)
+- CI validation of external deployment manifests
+- vulnerability scanning in release path
+- least-privilege runtime and observability-ready app endpoints
 
-## Practical Delivery Notes
+## Practical Notes
 
-- CI currently uses Docker-in-Docker for portability in a portfolio setup.
-- This is an intentional temporary trade-off; a production hardening path is migrating image build/push to BuildKit or Kaniko runners.
-- Staging and production promotion jobs are mapped to GitLab environments and should be protected with approval rules.
+- CI currently uses Docker-in-Docker for portability; production hardening path is BuildKit/Kaniko.
+- Staging/production jobs should map to protected environments with approvals in GitLab settings.
 
-## Dependency Lock Strategy
+## Dependency Reproducibility
 
-- Source dependency definitions are maintained in:
-  - `requirements.in`
-  - `requirements-dev.in`
-- Reproducible lock files are generated with hashes:
-  - `requirements.lock`
-  - `requirements-dev.lock`
-- Regenerate locks with:
+- source definitions: `requirements.in`, `requirements-dev.in`
+- hashed lock files: `requirements.lock`, `requirements-dev.lock`
+- regenerate locks:
   - `python -m piptools compile --generate-hashes --output-file requirements.lock requirements.in`
   - `python -m piptools compile --generate-hashes --output-file requirements-dev.lock requirements-dev.in`
 
 ## Local Development
 
-- Runtime deps: `pip install -r requirements.lock`
-- Dev/test deps: `pip install -r requirements-dev.lock`
-- Run app: `python -m app.src.main`
-- Run tests: `pytest app/tests -q`
+- runtime deps: `pip install -r requirements.lock`
+- dev/test deps: `pip install -r requirements-dev.lock`
+- run app: `python -m app.src.main`
+- run tests: `pytest app/tests -q`
