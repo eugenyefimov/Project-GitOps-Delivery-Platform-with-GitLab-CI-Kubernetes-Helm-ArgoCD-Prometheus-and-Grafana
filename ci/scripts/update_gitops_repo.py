@@ -20,13 +20,17 @@ def run(command: list[str], cwd: Path | None = None, env: dict[str, str] | None 
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
 
-def set_nested_key(payload: dict, dotted_key: str, value: str) -> None:
+def set_nested_key(payload: dict, dotted_key: str, value: str, strict: bool = False) -> None:
     parts = dotted_key.split(".")
     node = payload
     for key in parts[:-1]:
         if key not in node or not isinstance(node[key], dict):
+            if strict:
+                raise RuntimeError(f"Missing required key path segment '{key}' in '{dotted_key}'")
             node[key] = {}
         node = node[key]
+    if strict and parts[-1] not in node:
+        raise RuntimeError(f"Missing required leaf key '{parts[-1]}' in '{dotted_key}'")
     node[parts[-1]] = value
 
 
@@ -53,9 +57,12 @@ def main() -> None:
 
     repo_url = require_env("GITOPS_REPO_URL")
     push_token = require_env("GITOPS_PUSH_TOKEN")
-    values_file = require_env("GITOPS_IMAGE_TAG_FILE")
+    values_file = require_env("GITOPS_VALUES_FILE")
     image_tag = require_env("IMAGE_TAG")
     image_digest = require_env("IMAGE_DIGEST")
+    image_repository = require_env("IMAGE_REPO")
+    repository_key = os.getenv("GITOPS_IMAGE_REPOSITORY_KEY", "image.repository")
+    strict_keys = os.getenv("GITOPS_STRICT_KEYS", "false").lower() == "true"
 
     source_project = os.getenv("CI_PROJECT_PATH", "unknown-project")
     source_sha = os.getenv("CI_COMMIT_SHA", "unknown-sha")[:8]
@@ -83,7 +90,8 @@ def main() -> None:
         if not isinstance(payload, dict):
             raise RuntimeError(f"Expected top-level YAML object in: {values_file}")
 
-        set_nested_key(payload, digest_key, image_digest)
+        set_nested_key(payload, repository_key, image_repository, strict=strict_keys)
+        set_nested_key(payload, digest_key, image_digest, strict=strict_keys)
         with target_file.open("w", encoding="utf-8") as outfile:
             yaml.safe_dump(payload, outfile, sort_keys=False)
 

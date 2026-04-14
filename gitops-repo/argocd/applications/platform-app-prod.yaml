@@ -9,7 +9,7 @@ metadata:
 spec:
   project: platform-app-project
   source:
-    repoURL: https://gitlab.com/example-org/platform-gitops.git
+    repoURL: https://gitlab.com/user/platform-gitops.git
     targetRevision: main
     path: charts/platform-app
     helm:

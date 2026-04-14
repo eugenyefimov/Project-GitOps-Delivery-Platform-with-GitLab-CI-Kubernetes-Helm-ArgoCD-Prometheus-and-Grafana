@@ -67,5 +67,16 @@ spec:
               value: {{ $value | quote }}
             {{- end }}
           {{- end }}
+          {{- if .Values.container.writableTmp.enabled }}
+          volumeMounts:
+            - name: tmp
+              mountPath: {{ .Values.container.writableTmp.mountPath }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.container.writableTmp.enabled }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.container.writableTmp.sizeLimit }}
+      {{- end }}

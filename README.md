@@ -30,11 +30,11 @@ Pipeline stages:
 - `validate_gitops_manifests`: clone GitOps repo and lint/render Helm chart for `dev`, `staging`, `prod`
 - `build`: build image and produce trace metadata
 - `image_publish`: push tags and capture immutable image digest
+- `security_scan`: run Trivy vulnerability scan before any GitOps update
 - `gitops_update` jobs:
   - `gitops_update_dev` (automatic on default branch)
   - `promote_staging` (manual)
   - `promote_prod` (manual)
-- `security_scan_image`: Trivy scan of published image (advisory on feature branches, enforced on default branch/tags)
 
 ## Image Build and Publish Flow
 
@@ -53,7 +53,7 @@ After image publish, CI runs `ci/scripts/update_gitops_repo.py` to:
 
 1. clone the GitOps repository using CI-provided credentials
 2. update target environment values file (default: `charts/platform-app/values-dev.yaml`)
-3. write `image.digest` with the published digest
+3. write `image.repository` and `image.digest` with published artifact metadata
 4. commit with deployment trace metadata (app, env, source commit, pipeline)
 5. push to GitOps target branch
 
@@ -89,6 +89,24 @@ This preserves GitOps principles and reduces CI blast radius.
 - CI validation of deployment manifests before promotion
 - security baseline with vulnerability scanning and least-privilege runtime
 - observability-ready application behavior (health, readiness, metrics, structured logs)
+
+## Practical Delivery Notes
+
+- CI currently uses Docker-in-Docker for portability in a portfolio setup.
+- This is an intentional temporary trade-off; a production hardening path is migrating image build/push to BuildKit or Kaniko runners.
+- Staging and production promotion jobs are mapped to GitLab environments and should be protected with approval rules.
+
+## Dependency Lock Strategy
+
+- Source dependency definitions are maintained in:
+  - `requirements.in`
+  - `requirements-dev.in`
+- Reproducible lock files are generated with hashes:
+  - `requirements.lock`
+  - `requirements-dev.lock`
+- Regenerate locks with:
+  - `python -m piptools compile --generate-hashes --output-file requirements.lock requirements.in`
+  - `python -m piptools compile --generate-hashes --output-file requirements-dev.lock requirements-dev.in`
 
 ## Local Development
 

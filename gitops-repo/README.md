@@ -55,8 +55,9 @@ Promotion is commit-driven (`dev` -> `staging` -> `prod`), not manual `kubectl` 
 The application repository pipeline updates this repository by:
 
 - targeting an environment values file (for example `charts/platform-app/values-dev.yaml`)
-- writing an immutable `image.digest` value
+- writing `image.repository` and immutable `image.digest` values
 - committing with trace metadata (source commit, pipeline, environment)
+- using strict key validation for higher environments (`staging`/`prod`) to prevent accidental schema drift
 
 This gives deterministic release tracking and rollback via Git history.
 

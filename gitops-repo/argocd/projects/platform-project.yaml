@@ -6,7 +6,7 @@ metadata:
 spec:
   description: ArgoCD project boundaries for platform-app environments
   sourceRepos:
-    - https://gitlab.com/example-org/platform-gitops.git
+    - https://gitlab.com/user/platform-gitops.git
   destinations:
     - namespace: platform-dev
       server: https://kubernetes.default.svc

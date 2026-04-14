@@ -12,4 +12,4 @@ This directory documents how `platform-app` is represented in this GitOps reposi
   - `platform-staging`
   - `platform-prod`
 
-The application repository CI updates image tags in the target environment values file.
+The application repository CI updates `image.repository` and `image.digest` in the target environment values file.

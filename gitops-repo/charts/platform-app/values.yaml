@@ -11,6 +11,10 @@ image:
 
 container:
   port: 8080
+  writableTmp:
+    enabled: true
+    mountPath: /tmp
+    sizeLimit: 64Mi
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: true
