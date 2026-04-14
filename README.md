@@ -1,117 +1,146 @@
 # Platform App - Application Repository
 
-Application repository for a production-style two-repository GitOps delivery platform.
+Application repository for a two-repository GitOps delivery platform using GitLab CI/CD, Docker, Kubernetes, Helm, and ArgoCD.
 
-## Project Purpose
+## Problem This Project Solves
 
-This repository owns the application lifecycle:
+Typical CI pipelines build and deploy in the same system, which weakens auditability and increases deployment risk.  
+This project separates responsibilities:
 
-- source code and tests
-- container build and publish
-- CI automation that updates deployment state in an external GitOps repository
+- application repository: build, test, scan, publish artifacts
+- GitOps repository: deployment source of truth
+- ArgoCD: reconciliation from Git to Kubernetes
 
-It does not own cluster manifests as source-of-truth and does not deploy directly to Kubernetes.
+The result is traceable, controlled, and reproducible delivery.
 
-## Two-Repository Architecture
+## Key Features
 
-The platform is intentionally split into:
+- two-repository GitOps architecture
+- digest-based deployment updates (immutable release reference)
+- branch-aware CI pipeline with controlled promotions
+- external GitOps manifest validation during CI
+- vulnerability scan in release path
+- observability-ready service (`/livez`, `/readyz`, `/metrics`)
 
-- **Application repository (this repo)**: build, test, scan, publish image, update GitOps state
-- **GitOps repository (external remote repo)**: Helm values/manifests, ArgoCD Applications, environment deployment state
+## Architecture Overview
 
-This separation is required for GitOps integrity:
+- **This repository**
+  - application code and tests
+  - Docker image build/publish
+  - CI automation to update external GitOps state
+- **External GitOps repository**
+  - Helm chart and environment values
+  - ArgoCD Applications and deployment state
+- **Cluster runtime**
+  - ArgoCD syncs desired state from GitOps repo
+  - Kubernetes runs the workloads
+  - Prometheus/Grafana consume exposed metrics
 
-- GitOps repository remains the single source of truth for desired cluster state
-- CI credentials in app repo do not require direct cluster admin access
-- deployment history is auditable as Git commits in deployment repo
-- app delivery and cluster reconciliation are decoupled operationally
+## Architecture Diagram (Placeholder)
 
-## CI Pipeline Flow
+```text
+[Developer Push]
+      |
+      v
+[GitLab CI in App Repo]
+  test -> build -> publish -> scan -> gitops update
+      |
+      v
+[External GitOps Repo Commit]
+      |
+      v
+[ArgoCD Reconciliation]
+      |
+      v
+[Kubernetes Deployment]
+      |
+      v
+[Prometheus Scrape] -> [Grafana Dashboards]
+```
+
+## CI/CD Flow
 
 Pipeline stages:
 
-- `test`: run unit/integration tests with locked dependencies
-- `validate_gitops_manifests`: clone external GitOps repository and lint/render Helm chart for `dev`, `staging`, `prod`
-- `build`: build container image and generate trace metadata
-- `image_publish`: push tags and capture immutable digest
-- `security_scan`: run Trivy scan before GitOps update jobs
-- `gitops_update`:
-  - `gitops_update_dev` (automatic on default branch)
-  - `promote_staging` (manual)
-  - `promote_prod` (manual)
+- `test`
+  - app tests with locked dependencies
+  - Helm lint/template validation against external GitOps repo
+- `build`
+  - container build with traceable tags
+- `publish`
+  - image push to registry
+  - digest capture
+  - Trivy scan (strict on default branch/tags)
+- `gitops_update`
+  - `gitops_update_dev` automatic on default branch
+  - `promote_staging` manual
+  - `promote_prod` manual
 
-## Image Build and Publish Flow
+Image traceability:
 
-Each pipeline publishes:
+- `$CI_COMMIT_SHORT_SHA`
+- `$CI_COMMIT_REF_SLUG-$CI_PIPELINE_IID`
+- `latest` (default branch convenience only)
+- `IMAGE_DIGEST` (`sha256:...`) used for deployment updates
 
-- immutable commit tag: `$CI_COMMIT_SHORT_SHA`
-- trace tag: `$CI_COMMIT_REF_SLUG-$CI_PIPELINE_IID`
-- convenience tag: `latest` (default branch only)
-- immutable digest: `sha256:...` (captured after push)
+## GitOps Flow
 
-Digest is used as deployment truth to avoid mutable-tag drift.
+After image publish:
 
-## How CI Updates the External GitOps Repository
+1. CI runs `ci/scripts/update_gitops_repo.py`
+2. CI clones external GitOps repo using CI-provided credentials
+3. CI updates target values file (default dev path: `charts/platform-app/values-dev.yaml`)
+4. CI writes:
+   - `image.repository`
+   - `image.digest`
+5. CI commits and pushes
+6. ArgoCD detects Git change and syncs desired state to cluster
 
-After publish, CI runs `ci/scripts/update_gitops_repo.py`:
+CI never applies manifests to Kubernetes directly.
 
-1. clones external GitOps repo using secure CI credentials (`GITOPS_REPO_URL` + token)
-2. updates target values file (default: `charts/platform-app/values-dev.yaml` in GitOps repo)
-3. writes `image.repository` and `image.digest`
-4. commits with release trace metadata
-5. pushes to GitOps target branch
+## Environment Promotion Strategy
 
-Staging and production updates use the same updater through manual promotion jobs.
+- **dev**: automatic GitOps update from default branch
+- **staging**: manual promotion job
+- **prod**: manual promotion job
 
-For `dev`, the modified GitOps file is:
+This keeps feedback fast in dev and introduces explicit release control for higher environments.
+
+## Observability Basics
+
+The application exposes:
+
+- `/livez` for liveness checks
+- `/readyz` for readiness checks
+- `/metrics` for Prometheus scraping
+
+These endpoints support standard Kubernetes health management and Grafana dashboarding via Prometheus metrics.
+
+## What This Project Demonstrates
+
+- practical GitOps separation of concerns
+- CI/CD design with controlled promotion boundaries
+- immutable deployment references (digest-first)
+- cross-repository automation without hardcoded secrets
+- production-oriented baseline: security scan, health probes, metrics, structured logs
+
+## Repository Contract (App Repo -> External GitOps Repo)
+
+Expected files in the external GitOps repository:
 
 - `charts/platform-app/values-dev.yaml`
+- `charts/platform-app/values-staging.yaml`
+- `charts/platform-app/values-prod.yaml`
 
-ArgoCD watches the GitOps repository branch and application path. When CI pushes this values change, ArgoCD detects drift and reconciles the cluster to the new desired image state.
+Expected keys updated by CI:
 
-This preserves GitOps principles because CI changes Git state only; ArgoCD performs the deployment reconciliation to Kubernetes.
+- `image.repository`
+- `image.digest`
 
-## Why Deployment Is Handled by ArgoCD
+Promotion and protection expectations:
 
-CI must not deploy directly to Kubernetes in a GitOps model.
-
-ArgoCD deploys by reconciling GitOps repository state to cluster state:
-
-- pull-based reconciliation
-- declarative drift correction
-- auditable rollback via Git history
-- reduced CI blast radius and credential exposure
-
-## Key Technologies
-
-- **GitLab CI/CD**: pipeline orchestration and promotions
-- **Docker**: container build/package
-- **Kubernetes**: runtime platform
-- **Helm**: deployment packaging (in external GitOps repo)
-- **ArgoCD**: GitOps reconciliation (from external GitOps repo)
-- **Prometheus/Grafana**: metrics and visualization
-
-## DevOps Capabilities Demonstrated
-
-- strict two-repository GitOps boundary
-- digest-based immutable release updates
-- controlled promotion flow (`dev` -> `staging` -> `prod`)
-- CI validation of external deployment manifests
-- vulnerability scanning in release path
-- least-privilege runtime and observability-ready app endpoints
-
-## Practical Notes
-
-- CI currently uses Docker-in-Docker for portability; production hardening path is BuildKit/Kaniko.
-- Staging/production jobs should map to protected environments with approvals in GitLab settings.
-
-## Dependency Reproducibility
-
-- source definitions: `requirements.in`, `requirements-dev.in`
-- hashed lock files: `requirements.lock`, `requirements-dev.lock`
-- regenerate locks:
-  - `python -m piptools compile --generate-hashes --output-file requirements.lock requirements.in`
-  - `python -m piptools compile --generate-hashes --output-file requirements-dev.lock requirements-dev.in`
+- `gitops_update_dev` updates `values-dev.yaml` automatically from the default branch
+- `promote_staging` and `promote_prod` are manual and should run under protected GitLab environments with approval rules
 
 ## Local Development
 

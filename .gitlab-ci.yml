@@ -1,8 +1,7 @@
 stages:
   - test
   - build
-  - image_publish
-  - security_scan
+  - publish
   - gitops_update
 
 default:
@@ -26,7 +25,8 @@ workflow:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
 
-# Shared Docker-in-Docker configuration for build/publish jobs.
+# Shared Docker-in-Docker configuration.
+# Trade-off: simple and portable for portfolio use; production hardening path is BuildKit/Kaniko.
 .docker_job:
   image: docker:27.1.1
   services:
@@ -84,7 +84,9 @@ build:
   stage: build
   extends: .docker_job
   rules:
-    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
   script:
     - export IMAGE_TAG="${IMAGE_TAG_SHA}"
     - export IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
@@ -102,7 +104,7 @@ build:
     expire_in: 1 day
 
 image_publish:
-  stage: image_publish
+  stage: publish
   extends: .docker_job
   needs:
     - job: build
@@ -126,15 +128,16 @@ image_publish:
       dotenv: publish.env
     expire_in: 1 day
   rules:
-    - if: '$CI_COMMIT_BRANCH || $CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
 
 security_scan_image:
-  stage: security_scan
+  stage: publish
   image: aquasec/trivy:0.56.2
   needs:
-    - job: build
-      artifacts: true
     - job: image_publish
+      artifacts: true
   script:
     - export TRIVY_USERNAME="$CI_REGISTRY_USER"
     - export TRIVY_PASSWORD="$CI_REGISTRY_PASSWORD"
@@ -195,6 +198,7 @@ promote_staging:
   when: manual
   allow_failure: false
   rules:
+    # Controlled promotion from default branch only.
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 promote_prod:
@@ -221,4 +225,5 @@ promote_prod:
   when: manual
   allow_failure: false
   rules:
+    # Controlled promotion from default branch only.
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
